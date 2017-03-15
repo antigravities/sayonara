@@ -1,0 +1,16 @@
+{
+  "name": "sayonara",
+  "version": "0.1.0",
+  "description": "Scrapes Barter.vg trade offers.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Alexandra Frock <https://alexandra.moe>",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "cheerio": "^0.22.0",
+    "request": "^2.81.0"
+  }
+}
