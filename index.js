@@ -1,39 +1,24 @@
-// Number of simultaneous scraping processes.
-// Please be considerate
-var threads = 2;
+// Settings
 
-var Cheerio = require("cheerio");
+var threads = 5; // Number of separate processes to use when scraping. Keep this low, but more than 1.
+
+// Requires
+
 var request = require("request");
-var blessed = require("blessed");
-
+var cheerio = require("cheerio");
 var fs = require("fs");
+var blessed = require("blessed");
+var moment = require("moment");
 
-var threadstatus = [];
-
-var screen = blessed.screen({
-  smartCSR: true
-});
-
-screen.title = "Sayonara Barter 0.1.0";
-
-var output = blessed.box({
-  top: 'center', left: 'center', width: '99%', height: '99%', content: 'Please wait...',
-  tags: true, border: { type: 'line' }, style: { fg: 'white', bg: 'magenta' }, scrollable: true
-});
-
-screen.append(output);
-
-var users = [];
-
-var userAs = {};
-var trades = {};
-var itemsG = {};
-
+// Error reporting
 var errors = [];
 
-var skips = 0;
+// Item cache
+var itemCache = {};
 
-function User(name, uid, status, completed, unique, failed, steamid){
+// Data structures
+
+function User(name, uid, status, completed, unique, failed, steamid, regDate, comment, commentWhen){
   this.name = name;
   this.uid = uid;
   this.status = status;
@@ -41,14 +26,18 @@ function User(name, uid, status, completed, unique, failed, steamid){
   this.unique = unique;
   this.failed = failed;
   this.steamid = steamid;
+  this.regDate = regDate;
+  this.comment = comment;
+  this.commentWhen = commentWhen;
   this.trades = [];
 }
 
-function Item(name){
+function Item(id, name){
   this.name = name;
+  fs.writeFileSync("items/" + id + ".json", JSON.stringify(this));
 }
 
-function Trade(from, to, items_offered_number, items_offered, items_for_number, items_for, status){
+function Trade(id, from, to, items_offered_number, items_offered, items_for_number, items_for, status, timeUpdated){
   this.from = from;
   this.to = to;
   this.items_offered_number = items_offered_number;
@@ -56,6 +45,9 @@ function Trade(from, to, items_offered_number, items_offered, items_for_number, 
   this.items_for_number = items_for_number;
   this.items_for = items_for;
   this.status = status;
+  this.timeUpdated = timeUpdated;
+
+  fs.writeFileSync("offers/" + id + ".json", JSON.stringify(this));
 }
 
 function Cexc(thread, offendingItem, exc){
@@ -65,55 +57,53 @@ function Cexc(thread, offendingItem, exc){
   this.stack = exc.stack;
 
   errors.push(this);
+
+  fs.writeFileSync("errors.json", JSON.stringify(errors));
 }
+
+// Utility functions
 
 function getUserFromURL(url){
   return url.split("/")[4];
 }
 
-function s(status){
-  output.setContent("{bold}" + screen.title + "{/bold}\n\n" + status);
-  screen.render();
-}
+// Scrapers
 
-function pauseOnMessage(msg){
-  console.log(msg);
-  while(true){}
-}
+function getAllUsers(callback){
+  s("Requesting user list");
 
-function t(thread, status){
-  threadstatus[thread] = status;
-  var content = "{bold}" + screen.title + "{/bold}\n" + threadstatus[threads] + "\n";
+  request("https://barter.vg/u/", function(e,r,b){
+    if( e ){
+      s("Error requesting user list. Aborting");
+      s(e);
+      return;
+    }
 
-  for( var i=0; i<threadstatus.length; i++ ){
-    content += "{blue-bg}Thread " + i + "{/blue-bg}: " + threadstatus[i] +"\n";
-  }
+    var users = [];
+    var skips = 0;
 
-  content += "\n" + users.length + " users left in queue. Press Ctrl+C at any time to cancel";
+    s("Enumerating users");
 
-  output.setContent(content)
-  screen.render();
-}
+    var $ = cheerio.load(b);
 
-function queue(thread){
-  if(users.length == 0) return t(thread, "No users in queue, nothing to do...");
-  var user = users.shift();
-  t(thread, "Preparing to scrape " + user);
+    $("th").each(function(i, e){
+      if( i < 3 ) return;
 
-  try {
-    scrapeUser(thread, user, function(){
-      try {
-        scrapeTrades(thread, user, function(){
-          setTimeout(function(){ queue(thread) }, 1);
-        });
-      } catch(e){
-        new Cexc(thread, "scrapeTrades" + user, e);
+      var user = $(this).children().first();
+
+      // Skip uninitialized users
+      if( user.text() == "[ name missing ]" ){
+        skips+=1;
+        return;
       }
+
+      users.push(getUserFromURL(user.attr("href")));
     });
-  } catch(e){
-    new Cexc(thread, "scrapeUser " + user, e);
-    return queue(thread);
-  }
+
+    fs.writeFileSync("users/index.json", JSON.stringify(users));
+
+    callback(users, skips);
+  });
 }
 
 function scrapeUser(thread, user, callback){
@@ -127,64 +117,67 @@ function scrapeUser(thread, user, callback){
 
     t(thread, "[" + user + "] Scraping profile...");
 
-    try {
-      var $ = Cheerio.load(b);
-      var usera = new User($($("h1")[0]).text(), user, $($("strong")[1]).text(), parseInt($($("strong")[2]).text()), parseInt($($("strong")[3]).text()),
-        parseInt($($("strong")[4]).text()), $($($(".icon")[0]).parent()).attr("href").split("/")[4]);
-    } catch(e){
-      new Cexc(thread, "scrapeUser (inside) " + user, exc);
-      return callback();
-    }
-
-    userAs[user] = usera;
-    callback();
-  });
-}
-
-function scrapeTrades(thread, user, callback){
-  t(thread, "[" + user + "] Obtaining trade list");
-
-  request.post("https://barter.vg/u/" + user + "/o/", {form: { filter_by_status: "all" } }, function(e,r,b){
-    if( e ) {
-      t(thread, "[" + user + "] Hit an error. Pressing on!");
-      return callback();
-    }
-
-    var offers = [];
+    var usera;
 
     try {
-      var $ = Cheerio.load(b);
-      $("tr").each(function(i){
-        if( i == 0 ) return;
+      var $ = cheerio.load(b);
 
-        var elem = $(this);
+      var comment = $($($("form[action='?']")[0]).children()[0]);
 
-        if( $(this).children().length <= 1 ) return;
+      var cUpdated = new Date();
 
-        offers.push($($(this).children().first().children()[1]).attr("href").split("/")[6]);
-      });
-    } catch(e){
-      new Cexc(thread, "scrapeTrades (inside) " + user, exc);
-      return callback();
-    }
-
-    userAs[user].trades = offers;
-
-    if( offers.length == 0 ) return callback();
-
-    var i = 1;
-
-    function handle(){
-      i++;
-      if( i < offers.length ){
-        if( trades.hasOwnProperty(offers[i]) ) return handle();
-        scrapeTrade(thread, user, offers[i], handle);
+      if( comment.html().length > 400 ){
+        comment = "";
       } else {
-        callback();
+        var dateString = $(comment.children("span")[0]).text()
+        cUpdated = moment().subtract(parseInt(dateString.split(" ")[0]), dateString.split(" ")[1]).toDate()
+        comment.children("span, strong").each(function(){
+          $(this).remove();
+        });
+        comment = comment.text().trim();
       }
+
+      usera = new User($($("h1")[0]).text(), user, $($("strong")[1]).text(), parseInt($($("strong")[2]).text()), parseInt($($("strong")[3]).text()),
+        parseInt($($("strong")[4]).text()), $($($(".icon")[0]).parent()).attr("href").split("/")[4], new Date($($($("li")[5]).children()[0]).attr("title").split("on")[1]),
+        comment, cUpdated);
+    } catch(e){
+      new Cexc(thread, "scrapeUser (inside) " + user, e);
+      return callback(null);
     }
 
-    scrapeTrade(thread, user, offers[0], handle);
+    t(thread, "[" + user + "] Scraping trades...");
+
+    request.post("https://barter.vg/u/" + user + "/o/", {form: { filter_by_status: "all" } }, function(e,r,b){
+      if( e ) {
+        t(thread, "[" + user + "] Hit an error. Pressing on!");
+        return callback();
+      }
+
+      var offers = [];
+
+      try {
+        var $ = cheerio.load(b);
+        $("tr").each(function(i){
+          if( i == 0 ) return;
+
+          var elem = $(this);
+
+          if( $(this).children().length <= 1 ) return;
+
+          offers.push($($(this).children().first().children()[1]).attr("href").split("/")[6]);
+        });
+      } catch(e){
+        new Cexc(thread, "scrapeTrades (inside) " + user, exc);
+        return callback();
+      }
+
+      usera.offers = offers;
+
+      fs.writeFileSync("users/" + user + ".json", JSON.stringify(usera));
+
+      callback(offers);
+    });
+
   });
 }
 
@@ -198,7 +191,7 @@ function scrapeTrade(thread, user, trade, callback){
     }
 
     try {
-      var $ = Cheerio.load(b);
+      var $ = cheerio.load(b);
 
       var nOffered, nFor;
 
@@ -233,8 +226,10 @@ function scrapeTrade(thread, user, trade, callback){
               id=$(item.children()[1]).attr("href").split("/")[4];
             }
 
-            itemsG[parseInt(id)] = new Item($(item).text().split("↗")[0].trim());
-            items[i].push(parseInt(id));
+            if( ! itemCache.hasOwnProperty(id) ){
+              new Item(id, $(item).text().split("↗")[0].trim());
+              itemCache[id] = true;
+            }
           } catch(e){
             console.log(e);
             return;
@@ -257,14 +252,16 @@ function scrapeTrade(thread, user, trade, callback){
         uid1 = $($($($("td")[2]).children()[0]).children()[0]).attr("href").split("/")[4];
       }
 
-      trades[trade] = new Trade(
+      new Trade(
+        trade,
         uid0,
         uid1,
         nOffered,
         items[0],
         nFor,
         items[1],
-        $($(".statusCurrent")[0]).text()
+        $($(".statusCurrent")[0]).text(),
+        new Date($($("time")[0]).attr("datetime"))
       );
     } catch(e){
       new Cexc(thread, "scrapeTrade (inside) " + user + "/" + trade, e);
@@ -274,59 +271,86 @@ function scrapeTrade(thread, user, trade, callback){
   });
 }
 
-s("Requesting user list");
+// Init
 
-request("https://barter.vg/u/", function(e,r,b){
-  if( e ){
-    s("Error requesting user list. Aborting");
-    s(e);
-    return;
-  }
+if( ! fs.existsSync("users") ) fs.mkdirSync("users");
+if( ! fs.existsSync("offers") ) fs.mkdirSync("offers");
+if( ! fs.existsSync("items") ) fs.mkdirSync("items");
 
-  s("Enumerating users");
+// GUI
 
-  var $ = Cheerio.load(b);
-
-  $("th").each(function(i, e){
-    if( i < 3 ) return;
-
-    var user = $(this).children().first();
-
-    if( user.text() == "[ name missing ]" ){
-      skips+=1;
-      return;
-    }
-
-    users.push(getUserFromURL(user.attr("href")));
-  });
-
-  s("I will scrape " + users.length + " users (" + skips + " skipped) using " + threads + " threads in 10 seconds. Press Ctrl-C to cancel.");
-
-  setTimeout(function(){
-    s("Beginning scrape.");
-
-    for( var i=0; i<threads; i++ ){
-      prepTimeout(i);
-    }
-
-    t(threads, "No errors.");
-  }, 1);
-
-  setInterval(function(){
-    fs.writeFileSync("users.json", JSON.stringify(userAs));
-    fs.writeFileSync("trades.json", JSON.stringify(trades));
-    fs.writeFileSync("items.json", JSON.stringify(itemsG));
-    fs.writeFileSync("errors.json", JSON.stringify(errors));
-  }, 10000);
-
-});
-
-function prepTimeout(i){
-  setTimeout(function(){
-    queue(i);
-  }, i);
+function s(status){
+  output.setContent("{bold}" + screen.title + "{/bold}\n\n" + status);
+  screen.render();
 }
 
-process.on("uncaughtException", function(exc){
-  t(threads, "Uncaught exception: " + exc);
+var threadstatus = [];
+
+function t(thread, status){
+  threadstatus[thread] = status;
+  var content = "{bold}" + screen.title + "{/bold}\n" + threadstatus[threads] + "\n";
+
+  for( var i=0; i<threadstatus.length; i++ ){
+    content += "{blue-bg}Thread " + i + "{/blue-bg}: " + threadstatus[i] +"\n";
+  }
+
+  content += "\nPress Ctrl+C at any time to cancel";
+
+  output.setContent(content)
+  screen.render();
+}
+
+var screen = blessed.screen({
+  smartCSR: true
 });
+
+screen.title = "Sayonara Barter 0.1.0";
+
+var output = blessed.box({
+  top: 'center', left: 'center', width: '99%', height: '99%', content: '{bold}' + screen.title + '{/bold}',
+  tags: true, border: { type: 'line' }, style: { fg: 'white', bg: 'magenta' }, scrollable: true
+});
+
+screen.append(output);
+
+screen.render();
+
+// Application code
+
+setTimeout(function(){
+  getAllUsers(function(users, skips){
+    var queued = users;
+    function queue(thread){
+      if( queued.length < 1 ) return t(thread, "Oops! Nothing left to do...");
+      var user = queued.shift();
+      t(thread, "Selected user " + user);
+
+      scrapeUser(thread, user, function(offers){
+
+        if( offers == null ) return queue(thread);
+
+        var queuedOffers = offers;
+
+        function qo(){
+          if( queuedOffers.length == 0 ){
+            return queue(thread);
+          }
+
+          var currOffer = queuedOffers.shift();
+
+          scrapeTrade(thread, user, currOffer, qo);
+        }
+
+        qo();
+      });
+    }
+
+    function startThread(thread){
+      setTimeout(function(){ queue(thread); }, 0);
+    }
+
+    for( var i=0; i<threads; i++ ){
+      startThread(i);
+    }
+  });
+}, 0);
