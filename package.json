@@ -1,6 +1,6 @@
 {
   "name": "sayonara",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Scrapes Barter.vg trade offers.",
   "main": "index.js",
   "scripts": {
@@ -11,7 +11,9 @@
   "dependencies": {
     "blessed": "^0.1.81",
     "cheerio": "^0.22.0",
+    "lz-string": "^1.4.4",
     "moment": "^2.17.1",
     "request": "^2.81.0"
-  }
+  },
+  "repository": "antigravities/sayonara"
 }
