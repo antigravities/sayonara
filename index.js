@@ -1,6 +1,8 @@
 // Settings
 
-var threads = 5; // Number of separate processes to use when scraping. Keep this low, but more than 1.
+var threads = 8; // Number of separate processes to use when scraping. Keep this low, but more than 1.
+
+var rearchiveUsers = false;
 
 // Requires
 
@@ -29,12 +31,12 @@ function User(name, uid, status, completed, unique, failed, steamid, regDate, co
   this.regDate = regDate;
   this.comment = comment;
   this.commentWhen = commentWhen;
-  this.trades = [];
+  this.offers = [];
 }
 
 function Item(id, name){
   this.name = name;
-  fs.writeFileSync("items/" + id + ".json", JSON.stringify(this));
+  fs.writeFile("items/" + id + ".json", JSON.stringify(this));
 }
 
 function Trade(id, from, to, items_offered_number, items_offered, items_for_number, items_for, status, timeUpdated){
@@ -47,7 +49,7 @@ function Trade(id, from, to, items_offered_number, items_offered, items_for_numb
   this.status = status;
   this.timeUpdated = timeUpdated;
 
-  fs.writeFileSync("offers/" + id + ".json", JSON.stringify(this));
+  fs.writeFile("offers/" + id + ".json", JSON.stringify(this));
 }
 
 function Cexc(thread, offendingItem, exc){
@@ -58,7 +60,7 @@ function Cexc(thread, offendingItem, exc){
 
   errors.push(this);
 
-  fs.writeFileSync("errors.json", JSON.stringify(errors));
+  fs.writeFile("errors.json", JSON.stringify(errors));
 }
 
 // Utility functions
@@ -100,7 +102,7 @@ function getAllUsers(callback){
       users.push(getUserFromURL(user.attr("href")));
     });
 
-    fs.writeFileSync("users/index.json", JSON.stringify(users));
+    fs.writeFile("users/index.json", JSON.stringify(users));
 
     callback(users, skips);
   });
@@ -108,6 +110,8 @@ function getAllUsers(callback){
 
 function scrapeUser(thread, user, callback){
   t(thread, "[" + user + "] Obtaining profile");
+
+  if( ! rearchiveUsers && fs.existsSync("users/" + user + ".json") ) return callback(null);
 
   request("https://barter.vg/u/" + user, function(e,r,b){
     if( e ){
@@ -173,7 +177,7 @@ function scrapeUser(thread, user, callback){
 
       usera.offers = offers;
 
-      fs.writeFileSync("users/" + user + ".json", JSON.stringify(usera));
+      fs.writeFile("users/" + user + ".json", JSON.stringify(usera));
 
       callback(offers);
     });
@@ -183,6 +187,10 @@ function scrapeUser(thread, user, callback){
 
 function scrapeTrade(thread, user, trade, callback){
   t(thread, "[" + user + "/" + trade + "] Getting offer");
+
+  if( fs.existsSync("offers/" + trade + ".json") ){
+    return callback();
+  }
 
   request("https://barter.vg/u/" + user + "/o/" + trade + "/", function(e,r,b){
     if( e ){
@@ -218,22 +226,23 @@ function scrapeTrade(thread, user, trade, callback){
             var id = "";
 
             try {
+              if( $($(item.children()[1]).children().first()).attr("href") != null ){
+                id=$($(item.children()[1]).children().first()).attr("href").split("/")[4];
+              }
+              else {
+                id=$(item.children()[1]).attr("href").split("/")[4];
+              }
 
-            if( $($(item.children()[1]).children().first()).attr("href") != null ){
-              id=$($(item.children()[1]).children().first()).attr("href").split("/")[4];
-            }
-            else {
-              id=$(item.children()[1]).attr("href").split("/")[4];
-            }
+              if( ! itemCache.hasOwnProperty(id) ){
+                new Item(id, $(item).text().split("↗")[0].trim());
+                itemCache[id] = true;
+              }
 
-            if( ! itemCache.hasOwnProperty(id) ){
-              new Item(id, $(item).text().split("↗")[0].trim());
-              itemCache[id] = true;
+              items[i].push(id);
+            } catch(e){
+              new Cexc(thread, "scrapeTrade (inside) " + trade, e);
+              return callback();
             }
-          } catch(e){
-            console.log(e);
-            return;
-          }
         });
       });
 
