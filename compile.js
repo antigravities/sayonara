@@ -11,7 +11,7 @@ function compile(item){
       var name = v.toString().split(".")[0];
       itmres[name] = JSON.parse(fs.readFileSync(item + "/" + v));
     });
-    fs.writeFileSync(item + ".json", lz.compressToEncodedURIComponent(JSON.stringify(itmres)));
+    fs.writeFileSync(item + ".lz", lz.compressToEncodedURIComponent(JSON.stringify(itmres)));
 }
 
 compile("offers");
