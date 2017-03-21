@@ -39,7 +39,7 @@ function Item(id, name){
   fs.writeFile("items/" + id + ".json", JSON.stringify(this));
 }
 
-function Trade(id, from, to, items_offered_number, items_offered, items_for_number, items_for, status, timeUpdated){
+function Trade(id, from, to, items_offered_number, items_offered, items_for_number, items_for, status, timeUpdated, comments){
   this.from = from;
   this.to = to;
   this.items_offered_number = items_offered_number;
@@ -48,8 +48,15 @@ function Trade(id, from, to, items_offered_number, items_offered, items_for_numb
   this.items_for = items_for;
   this.status = status;
   this.timeUpdated = timeUpdated;
+  this.comments = comments;
 
   fs.writeFile("offers/" + id + ".json", JSON.stringify(this));
+}
+
+function Comment(from, message, when){
+  this.from = from;
+  this.message = message;
+  this.when = when;
 }
 
 function Cexc(thread, offendingItem, exc){
@@ -101,6 +108,8 @@ function getAllUsers(callback){
 
       users.push(getUserFromURL(user.attr("href")));
     });
+
+    s("Writing files");
 
     fs.writeFile("users/index.json", JSON.stringify(users));
 
@@ -214,6 +223,19 @@ function scrapeTrade(thread, user, trade, callback){
       if( nOffered == null ) nOffered = 1;
       if( nFor == null ) nFor = 1;
 
+      var comments = [];
+
+      if( !!$("#offerMessages").length ){
+        $("#offerMessages").children().each(function(){
+          if($($(this).children("abbr")[0]).attr("style") == "color:#777;") return;
+          var uid = $(this.children[0]).attr("href").split("/")[4];
+          var time = new Date($($(this).children("time")[0]).attr("datetime"));
+          $($(this).children("time")[0]).remove();
+          var comment = $(this).text().trim();
+          comments.push(new Comment(uid, comment, time));
+        });
+      }
+
       var items = [];
 
       $(".tradables_items_list").each(function(i){
@@ -270,7 +292,8 @@ function scrapeTrade(thread, user, trade, callback){
         nFor,
         items[1],
         $($(".statusCurrent")[0]).text(),
-        new Date($($("time")[0]).attr("datetime"))
+        new Date($($("time")[0]).attr("datetime")),
+        comments
       );
     } catch(e){
       new Cexc(thread, "scrapeTrade (inside) " + user + "/" + trade, e);
