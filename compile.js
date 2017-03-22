@@ -1,5 +1,5 @@
 var fs = require("fs");
-var lz = require("lz");
+var lz = require("lz-string");
 
 console.log("Compiling database...");
 
